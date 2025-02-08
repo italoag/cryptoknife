@@ -1,0 +1,25 @@
+[package]
+name = "cryptoknife"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "cryptoknife_lib"
+
+[dependencies]
+clap = {version = "4", features = ["derive"]}
+indicatif = "0.17"
+blake3 = "1.5"
+sha3 = "0.10"
+hex = "0.4"
+crc32fast = "1.4"
+walkdir = "2.5"
+anyhow = "1.0"
+log = "0.4"
+memmap2 = "0.9"
+futures = "0.3"
+tokio = { version = "1.43.0", features = ["full"] }
+simplelog = "0.12"
+
+[dev-dependencies]
+tempfile = "3.16"
