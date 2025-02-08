@@ -8,9 +8,22 @@ use tokio::fs;
 
 const MAX_CONCURRENT_FILES: usize = 100; // Limita o número de operações simultâneas
 
+const KNOWN_EXTENSIONS: &[&str] = &[
+    "sha3-256", "sha3-512",
+    "keccak256", "keccak512",
+    "blake3",
+    "sfv",
+    "k12-256", "k12-512",
+    "whirlpool",
+];
+
+fn is_checksum_file(fname: &str) -> bool {
+    KNOWN_EXTENSIONS.iter().any(|ext| fname.ends_with(ext))
+}
+
 /// Verifica os arquivos de dados comparando com seus respectivos arquivos de checksum.
-/// Para cada arquivo, procura um arquivo de checksum com o mesmo nome acrescido da extensão.
-/// Se o arquivo de checksum não for encontrado, é registrada a mensagem "[Not Found]".
+/// Para cada arquivo, procura um arquivo de checksum com o mesmo nome acrescido da extensão do algoritmo.
+/// Se o arquivo de checksum não for encontrado, registra uma mensagem de aviso.
 pub async fn verify_checksums(
     paths: &[PathBuf],
     algorithm: Algorithm,
@@ -18,12 +31,12 @@ pub async fn verify_checksums(
     buffer_size: usize,
 ) -> Result<()> {
     let all_files = gather_files(paths)?;
-    // Filtra apenas os arquivos de dados (descarta os que já têm extensão de checksum)
+    // Filtra: ignora arquivos que já são checksum
     let files: Vec<PathBuf> = all_files
         .into_iter()
         .filter(|file| {
             if let Some(fname) = file.file_name().and_then(|s| s.to_str()) {
-                !fname.ends_with(algorithm.extension())
+                !is_checksum_file(fname)
             } else {
                 true
             }
@@ -81,13 +94,13 @@ pub async fn verify_checksums(
             Ok::<(), anyhow::Error>(())
         }
     }))
-        .buffer_unordered(MAX_CONCURRENT_FILES)
-        .for_each(|result| async {
-            if let Err(e) = result {
-                log::error!("Erro ao verificar arquivo: {}", e);
-            }
-        })
-        .await;
+    .buffer_unordered(MAX_CONCURRENT_FILES)
+    .for_each(|result| async {
+        if let Err(e) = result {
+            log::error!("Erro ao verificar arquivo: {}", e);
+        }
+    })
+    .await;
 
     pb.finish_with_message("Verificação concluída.");
     Ok(())

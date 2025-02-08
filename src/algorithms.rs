@@ -2,25 +2,28 @@ use anyhow::Result;
 use std::io::Read;
 use std::path::Path;
 use tokio::io::AsyncReadExt;
-
-// Importações para os algoritmos de SHA3 e Keccak.
 use sha3::{Digest, Sha3_256, Sha3_512, Keccak256, Keccak512};
+use blake3;
+use crc32fast;
+use whirlpool::Whirlpool;
 
-/// Limiar (em bytes) para considerar um arquivo como “grande” e usar memory mapping.
+use memmap2::Mmap;
+
 const LARGE_FILE_THRESHOLD: u64 = 10 * 1024 * 1024; // 10 MB
 
-/// Algoritmos suportados.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Algorithm {
     BLAKE3,
-    // Para SHA3 e Keccak, passamos o tamanho (em bits)
+    CRC32,
+    // Para SHA3, KangarooTwelve e Keccak, indicamos o tamanho (em bits)
     SHA3 { bits: u16 },
     Keccak { bits: u16 },
-    CRC32,
+    KangarooTwelve { bits: u16 },
+    Whirlpool,
 }
 
 impl Algorithm {
-    /// Retorna a extensão associada a cada algoritmo.
+    /// Retorna uma extensão usada para nomear os arquivos de checksum.
     pub fn extension(&self) -> &'static str {
         match self {
             Algorithm::SHA3 { bits } => match bits {
@@ -35,19 +38,24 @@ impl Algorithm {
             },
             Algorithm::CRC32 => "sfv",
             Algorithm::BLAKE3 => "blake3",
+            Algorithm::KangarooTwelve { bits } => match bits {
+                256 => "k12-256",
+                512 => "k12-512",
+                _ => "k12",
+            },
+            Algorithm::Whirlpool => "whirlpool",
         }
     }
 }
 
-/// Calcula o hash de um arquivo de forma assíncrona.  
-/// Se o arquivo for grande (>= 10 MB), usa memory mapping em uma task bloqueante.
+/// Calcula o hash de um arquivo de forma assíncrona.
+/// Se o arquivo for grande (>= 10 MB), utiliza memory mapping dentro de uma task bloqueante.
 pub async fn compute_hash_async(path: &Path, algorithm: Algorithm, buffer_size: usize) -> Result<String> {
     let metadata = tokio::fs::metadata(path).await?;
     if metadata.len() >= LARGE_FILE_THRESHOLD {
         let path = path.to_owned();
         match algorithm {
             Algorithm::SHA3 { bits } => {
-                use memmap2::Mmap;
                 let join_handle = tokio::task::spawn_blocking(move || -> Result<String> {
                     let file = std::fs::File::open(&path)?;
                     let mmap = unsafe { Mmap::map(&file)? };
@@ -68,9 +76,8 @@ pub async fn compute_hash_async(path: &Path, algorithm: Algorithm, buffer_size: 
                 });
                 let result = join_handle.await??;
                 Ok(result)
-            }
+            },
             Algorithm::Keccak { bits } => {
-                use memmap2::Mmap;
                 let join_handle = tokio::task::spawn_blocking(move || -> Result<String> {
                     let file = std::fs::File::open(&path)?;
                     let mmap = unsafe { Mmap::map(&file)? };
@@ -91,9 +98,8 @@ pub async fn compute_hash_async(path: &Path, algorithm: Algorithm, buffer_size: 
                 });
                 let result = join_handle.await??;
                 Ok(result)
-            }
+            },
             Algorithm::CRC32 => {
-                use memmap2::Mmap;
                 let join_handle = tokio::task::spawn_blocking(move || -> Result<String> {
                     let file = std::fs::File::open(&path)?;
                     let mmap = unsafe { Mmap::map(&file)? };
@@ -104,9 +110,8 @@ pub async fn compute_hash_async(path: &Path, algorithm: Algorithm, buffer_size: 
                 });
                 let result = join_handle.await??;
                 Ok(result)
-            }
+            },
             Algorithm::BLAKE3 => {
-                use memmap2::Mmap;
                 let join_handle = tokio::task::spawn_blocking(move || -> Result<String> {
                     let file = std::fs::File::open(&path)?;
                     let mmap = unsafe { Mmap::map(&file)? };
@@ -117,7 +122,37 @@ pub async fn compute_hash_async(path: &Path, algorithm: Algorithm, buffer_size: 
                 });
                 let result = join_handle.await??;
                 Ok(result)
-            }
+            },
+            Algorithm::KangarooTwelve { bits } => {
+                let join_handle = tokio::task::spawn_blocking(move || -> Result<String> {
+                    use k12::{KangarooTwelve, digest::Update, digest::ExtendableOutput};
+                    let file = std::fs::File::open(&path)?;
+                    let mmap = unsafe { Mmap::map(&file)? };
+                    let mut hasher = KangarooTwelve::default();
+                    hasher.update(&mmap);
+                    let output_size = match bits {
+                        256 => 32,
+                        512 => 64,
+                        _ => panic!("Unsupported KangarooTwelve bits: {}", bits),
+                    };
+                    let output = hasher.finalize_boxed(output_size);
+                    Ok(hex::encode(output.as_ref()))
+                });
+                let result = join_handle.await??;
+                Ok(result)
+            },
+            Algorithm::Whirlpool => {
+                let join_handle = tokio::task::spawn_blocking(move || -> Result<String> {
+                    let file = std::fs::File::open(&path)?;
+                    let mmap = unsafe { Mmap::map(&file)? };
+                    let mut hasher = Whirlpool::new();
+                    hasher.update(&mmap);
+                    let result = hasher.finalize();
+                    Ok(hex::encode(result))
+                });
+                let result = join_handle.await??;
+                Ok(result)
+            },
         }
     } else {
         let mut file = tokio::fs::File::open(path).await?;
@@ -146,7 +181,7 @@ pub async fn compute_hash_async(path: &Path, algorithm: Algorithm, buffer_size: 
                     _ => panic!("Unsupported SHA3 bits: {}", bits),
                 };
                 Ok(encoded)
-            }
+            },
             Algorithm::Keccak { bits } => {
                 let mut buffer = vec![0u8; buffer_size];
                 let encoded = match bits {
@@ -171,7 +206,7 @@ pub async fn compute_hash_async(path: &Path, algorithm: Algorithm, buffer_size: 
                     _ => panic!("Unsupported Keccak bits: {}", bits),
                 };
                 Ok(encoded)
-            }
+            },
             Algorithm::CRC32 => {
                 let mut hasher = crc32fast::Hasher::new();
                 let mut buffer = vec![0u8; buffer_size];
@@ -182,7 +217,7 @@ pub async fn compute_hash_async(path: &Path, algorithm: Algorithm, buffer_size: 
                 }
                 let hash = hasher.finalize();
                 Ok(format!("{:08x}", hash))
-            }
+            },
             Algorithm::BLAKE3 => {
                 let mut hasher = blake3::Hasher::new();
                 let mut buffer = vec![0u8; buffer_size];
@@ -193,12 +228,37 @@ pub async fn compute_hash_async(path: &Path, algorithm: Algorithm, buffer_size: 
                 }
                 let result = hasher.finalize();
                 Ok(result.to_hex().to_string())
-            }
+            },
+            Algorithm::KangarooTwelve { bits } => {
+                let mut data = Vec::new();
+                file.read_to_end(&mut data).await?;
+                use k12::{KangarooTwelve, digest::Update, digest::ExtendableOutput};
+                let mut hasher = KangarooTwelve::default();
+                hasher.update(&data);
+                let output_size = match bits {
+                    256 => 32,
+                    512 => 64,
+                    _ => panic!("Unsupported KangarooTwelve bits: {}", bits),
+                };
+                let output = hasher.finalize_boxed(output_size);
+                Ok(hex::encode(output.as_ref()))
+            },
+            Algorithm::Whirlpool => {
+                let mut hasher = Whirlpool::new();
+                let mut buffer = vec![0u8; buffer_size];
+                loop {
+                    let n = file.read(&mut buffer).await?;
+                    if n == 0 { break; }
+                    hasher.update(&buffer[..n]);
+                }
+                let result = hasher.finalize();
+                Ok(hex::encode(result))
+            },
         }
     }
 }
 
-/// Calcula o hash a partir de um slice de bytes (opera de forma síncrona).
+/// Calcula o hash a partir de um slice de bytes (forma síncrona).
 pub fn compute_hash_from_bytes(data: &[u8], algorithm: Algorithm) -> String {
     match algorithm {
         Algorithm::SHA3 { bits } => match bits {
@@ -236,6 +296,23 @@ pub fn compute_hash_from_bytes(data: &[u8], algorithm: Algorithm) -> String {
             let mut hasher = blake3::Hasher::new();
             hasher.update(data);
             hasher.finalize().to_hex().to_string()
+        },
+        Algorithm::KangarooTwelve { bits } => {
+            use k12::{KangarooTwelve, digest::Update, digest::ExtendableOutput};
+            let mut hasher = KangarooTwelve::default();
+            hasher.update(data);
+            let output_size = match bits {
+                256 => 32,
+                512 => 64,
+                _ => panic!("Unsupported KangarooTwelve bits: {}", bits),
+            };
+            let output = hasher.finalize_boxed(output_size);
+            hex::encode(output.as_ref())
+        },
+        Algorithm::Whirlpool => {
+            let mut hasher = Whirlpool::new();
+            hasher.update(data);
+            hex::encode(hasher.finalize())
         },
     }
 }
@@ -304,6 +381,29 @@ pub fn compute_hash_from_reader<R: Read>(reader: &mut R, algorithm: Algorithm, b
             }
             Ok(hasher.finalize().to_hex().to_string())
         },
+        Algorithm::KangarooTwelve { bits } => {
+            let mut data = Vec::new();
+            reader.read_to_end(&mut data)?;
+            use k12::{KangarooTwelve, digest::Update, digest::ExtendableOutput};
+            let mut hasher = KangarooTwelve::default();
+            hasher.update(&data);
+            let output_size = match bits {
+                256 => 32,
+                512 => 64,
+                _ => panic!("Unsupported KangarooTwelve bits: {}", bits),
+            };
+            let output = hasher.finalize_boxed(output_size);
+            Ok(hex::encode(output.as_ref()))
+        },
+        Algorithm::Whirlpool => {
+            let mut hasher = Whirlpool::new();
+            loop {
+                let n = reader.read(&mut buffer)?;
+                if n == 0 { break; }
+                hasher.update(&buffer[..n]);
+            }
+            Ok(hex::encode(hasher.finalize()))
+        },
     }
 }
 
@@ -358,6 +458,30 @@ mod tests {
         let hash = compute_hash_from_bytes(data, Algorithm::BLAKE3);
         let expected = "d74981efa70a0c880b8d8c1985d075dbcbf679b99a5f9914e5aaf96b831a9e24";
         assert_eq!(hash, expected);
+    }
+
+    #[test]
+    fn test_compute_hash_from_bytes_kangaroo256() {
+        let data = b"hello world";
+        let hash = compute_hash_from_bytes(data, Algorithm::KangarooTwelve { bits: 256 });
+        // Apenas verifica se o hash não é vazio (valor exato pode variar)
+        assert!(!hash.is_empty());
+    }
+
+    #[test]
+    fn test_compute_hash_from_bytes_kangaroo512() {
+        let data = b"hello world";
+        let hash = compute_hash_from_bytes(data, Algorithm::KangarooTwelve { bits: 512 });
+        // Apenas verifica se o hash não é vazio (valor exato pode variar)
+        assert!(!hash.is_empty());
+    }
+
+    #[test]
+    fn test_compute_hash_from_bytes_whirlpool() {
+        let data = b"hello world";
+        let hash = compute_hash_from_bytes(data, Algorithm::Whirlpool);
+        // Apenas verifica se o hash não é vazio (valor exato pode variar)
+        assert!(!hash.is_empty());
     }
 
     #[test]

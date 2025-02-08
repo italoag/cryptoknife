@@ -19,7 +19,7 @@ struct Cli {
 
     /// Algoritmo a ser utilizado.
     /// Exemplos válidos:
-    ///   sha3-256, sha3-512, keccak-256, keccak-512, blake3, crc32
+    ///   sha3-256, sha3-512, keccak-256, keccak-512, blake3, crc32, k12-256, k12-512, whirlpool
     #[arg(long, short = 'a', default_value = "blake3")]
     algorithm: String,
 
@@ -38,14 +38,17 @@ enum OperationMode {
     Verify,
 }
 
-/// Interpreta a string informada em --algorithm e retorna o algoritmo correspondente.
+/// Converte a string de algoritmo para o enum correspondente.
 /// Exemplos:
-/// - "sha3-256"   → Algorithm::SHA3 { bits: 256 }
-/// - "sha3-512"   → Algorithm::SHA3 { bits: 512 }
-/// - "keccak-256" → Algorithm::Keccak { bits: 256 }
-/// - "keccak-512" → Algorithm::Keccak { bits: 512 }
-/// - "blake3"     → Algorithm::BLAKE3
+/// - "sha3-256"    → Algorithm::SHA3 { bits: 256 }
+/// - "sha3-512"    → Algorithm::SHA3 { bits: 512 }
+/// - "keccak-256"  → Algorithm::Keccak { bits: 256 }
+/// - "keccak-512"  → Algorithm::Keccak { bits: 512 }
+/// - "blake3"      → Algorithm::BLAKE3
 /// - "crc32" ou "sfv" → Algorithm::CRC32
+/// - "k12-256"     → Algorithm::KangarooTwelve { bits: 256 }
+/// - "k12-512"     → Algorithm::KangarooTwelve { bits: 512 }
+/// - "whirlpool"   → Algorithm::Whirlpool
 fn parse_algorithm(s: &str) -> Option<Algorithm> {
     let s = s.to_lowercase();
     if s.starts_with("sha3-") {
@@ -66,16 +69,23 @@ fn parse_algorithm(s: &str) -> Option<Algorithm> {
         return Some(Algorithm::BLAKE3);
     } else if s == "crc32" || s == "sfv" {
         return Some(Algorithm::CRC32);
+    } else if s.starts_with("k12-") {
+        let parts: Vec<&str> = s.split('-').collect();
+        if parts.len() == 2 {
+            if let Ok(bits) = parts[1].parse::<u16>() {
+                return Some(Algorithm::KangarooTwelve { bits });
+            }
+        }
+    } else if s == "whirlpool" {
+        return Some(Algorithm::Whirlpool);
     }
     None
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Processa os argumentos.
     let cli = Cli::parse();
 
-    // Define o nível de log padrão com base no modo de compilação.
     let default_log_level = if cfg!(debug_assertions) {
         LevelFilter::Debug
     } else {
@@ -83,18 +93,11 @@ async fn main() -> anyhow::Result<()> {
     };
     let log_level = if cli.verbose { LevelFilter::Debug } else { default_log_level };
 
-    // Inicializa o logger combinando terminal e arquivo.
     CombinedLogger::init(vec![
-        TermLogger::new(
-            log_level,
-            Config::default(),
-            TerminalMode::Mixed,
-            ColorChoice::Auto,
-        ),
-        WriteLogger::new(log_level, Config::default(), File::create("hashsum.log")?),
+        TermLogger::new(log_level, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
+        WriteLogger::new(log_level, Config::default(), File::create("cryptoknife.log")?),
     ])?;
 
-    // Converte a string de algoritmo para o valor do enum.
     let algorithm = match parse_algorithm(&cli.algorithm) {
         Some(alg) => alg,
         None => {
@@ -103,7 +106,6 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // Executa o modo escolhido.
     match cli.mode {
         OperationMode::Generate => {
             generate_checksums(&cli.paths, algorithm, cli.verbose, cli.buffer_size).await?

@@ -8,6 +8,20 @@ use tokio::fs;
 
 const MAX_CONCURRENT_FILES: usize = 100; // Limita o número de operações simultâneas
 
+// Lista de extensões geradas pelos algoritmos
+const KNOWN_EXTENSIONS: &[&str] = &[
+    "sha3-256", "sha3-512",
+    "keccak256", "keccak512",
+    "blake3",
+    "sfv",
+    "k12-256", "k12-512",
+    "whirlpool",
+];
+
+fn is_checksum_file(fname: &str) -> bool {
+    KNOWN_EXTENSIONS.iter().any(|ext| fname.ends_with(ext))
+}
+
 /// Gera arquivos de checksum para cada arquivo de dados encontrado.
 /// Para cada arquivo (seja individual ou em diretório), é criado um arquivo com o mesmo nome acrescido da extensão do algoritmo.
 /// O parâmetro `buffer_size` define o tamanho do buffer usado para leituras assíncronas.
@@ -23,18 +37,17 @@ pub async fn generate_checksums(
         return Ok(());
     }
 
-    // Filtra: descarta arquivos que já possuem extensão de checksum (.sha256 ou .sfv)
+    // Filtra: ignora arquivos que já são checksum (qualquer algoritmo)
     let files: Vec<PathBuf> = files
-    .into_iter()
-    .filter(|file| {
-        if let Some(fname) = file.file_name().and_then(|s| s.to_str()) {
-            // Descartar apenas os arquivos que já possuem a extensão do algoritmo atual.
-            !fname.ends_with(algorithm.extension())
-        } else {
-            true
-        }
-    })
-    .collect();
+        .into_iter()
+        .filter(|file| {
+            if let Some(fname) = file.file_name().and_then(|s| s.to_str()) {
+                !is_checksum_file(fname)
+            } else {
+                true
+            }
+        })
+        .collect();
 
     let pb = ProgressBar::new(files.len() as u64);
     pb.set_style(
@@ -64,13 +77,13 @@ pub async fn generate_checksums(
             Ok::<(), anyhow::Error>(())
         }
     }))
-        .buffer_unordered(MAX_CONCURRENT_FILES)
-        .for_each(|result| async {
-            if let Err(e) = result {
-                log::error!("Erro ao processar arquivo: {}", e);
-            }
-        })
-        .await;
+    .buffer_unordered(MAX_CONCURRENT_FILES)
+    .for_each(|result| async {
+        if let Err(e) = result {
+            log::error!("Erro ao processar arquivo: {}", e);
+        }
+    })
+    .await;
 
     pb.finish_with_message("Geração concluída.");
     Ok(())

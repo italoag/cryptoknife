@@ -265,6 +265,7 @@ dependencies = [
  "futures",
  "hex",
  "indicatif",
+ "k12",
  "log",
  "memmap2",
  "sha3",
@@ -272,6 +273,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "walkdir",
+ "whirlpool",
 ]
 
 [[package]]
@@ -477,6 +479,16 @@ checksum = "1cfaf33c695fc6e08064efbc1f72ec937429614f25eef83af942d0e227c3a28f"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "k12"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4dc5fdb62af2f520116927304f15d25b3c2667b4817b90efdc045194c912c54"
+dependencies = [
+ "digest",
+ "sha3",
 ]
 
 [[package]]
@@ -998,6 +1010,15 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "whirlpool"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1ae50671d985c15b3214c7d969b8b520759fb3c8682444bec15ef775335a05c"
+dependencies = [
+ "digest",
 ]
 
 [[package]]
