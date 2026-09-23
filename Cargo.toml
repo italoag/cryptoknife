@@ -1,28 +1,31 @@
 [package]
 name = "cryptoknife"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "Geração e verificação segura de checksums para arquivos e diretórios"
+repository = "https://github.com/italoag/cryptoknife"
+readme = "README.md"
 
 [lib]
 name = "cryptoknife_lib"
 
 [dependencies]
 clap = {version = "4", features = ["derive"]}
-indicatif = "0.17"
 blake3 = "1.5"
 sha3 = "0.10"
 hex = "0.4"
 crc32fast = "1.4"
 walkdir = "2.5"
 anyhow = "1.0"
-log = "0.4"
-memmap2 = "0.9"
 futures = "0.3"
-tokio = { version = "1.43", features = ["full"] }
-simplelog = "0.12"
+tokio = { version = "1.43", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 k12 = "0.3"
 whirlpool = "0.10"
-
-
-[dev-dependencies]
-tempfile = "3.16"
+tempfile = "=3.16.0"
+cap-std = "=3.4.4"
+serde = { version = "=1.0.217", features = ["derive"] }
+serde_json = "=1.0.138"
+indicatif = "=0.17.11"
+same-file = "=1.0.6"

@@ -1,4 +1,7 @@
 /target
+/dist/
 .qodo/
 .idea/
+__pycache__/
+*.pyc
 
