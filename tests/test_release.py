@@ -30,6 +30,7 @@ GIT_ENV = {
 GH_ENV_KEYS = (
     "GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY", "GITHUB_ACTIONS",
     "GITHUB_REF", "GITHUB_REPOSITORY", "GH_TOKEN", "GH_REPO",
+    "CRYPTOKNIFE_PLAN_SHA256",
 )
 
 MANIFEST = """[package]
@@ -324,6 +325,19 @@ class TestPrepareOffline(unittest.TestCase):
         with self.assertRaises(release.ReleaseError):
             prepare(repo, self.plan_dir(), "--offline", "--resume-tag", "v0.2.0")
 
+    def test_outputs_include_plan_hash(self):
+        repo = init_repo(self.base)
+        commit_file(repo, "b.txt", "x", "fix: corrige")
+        out_file = self.base / "ghout.txt"
+        prepare(repo, self.plan_dir(), "--offline",
+                env={"GITHUB_OUTPUT": str(out_file)})
+        values = dict(
+            line.split("=", 1) for line in out_file.read_text().splitlines()
+        )
+        plan_path = self.plan_dir() / "_plan.json"
+        self.assertEqual(values["plan_sha256"], sha256_bytes(plan_path.read_bytes()))
+        self.assertEqual(values["version"], "0.2.0")
+
     def test_unicode_commit_message_in_notes(self):
         repo = init_repo(self.base)
         git(repo, "tag", "v0.2.0")
@@ -529,6 +543,15 @@ class TestPlanValidation(unittest.TestCase):
         plan = self.rewrite(**{"unexpected": 1})
         with self.assertRaises(release.ReleaseError):
             release.load_plan(self.plan_dir)
+
+    def test_load_plan_env_hash(self):
+        good = sha256_bytes((self.plan_dir / "_plan.json").read_bytes())
+        with mock.patch.dict(os.environ, {"CRYPTOKNIFE_PLAN_SHA256": good}):
+            release.load_plan(self.plan_dir)
+        for bad in ("xyz", "0" * 64):
+            with mock.patch.dict(os.environ, {"CRYPTOKNIFE_PLAN_SHA256": bad}):
+                with self.assertRaises(release.ReleaseError, msg=bad):
+                    release.load_plan(self.plan_dir)
 
     def test_schema_version_bool_rejected(self):
         self.rewrite(schema_version=True)
@@ -769,10 +792,16 @@ class PublishFixture(unittest.TestCase):
             "GITHUB_REF": "refs/heads/main",
             "GITHUB_REPOSITORY": "owner/repo",
         }
+        self.refresh_plan_hash()
         self.real_run = release.run
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def refresh_plan_hash(self):
+        self.env["CRYPTOKNIFE_PLAN_SHA256"] = sha256_bytes(
+            (self.plan_dir / "_plan.json").read_bytes()
+        )
 
     def fake_run(self, argv, **kwargs):
         argv = [str(a) for a in argv]
@@ -808,6 +837,7 @@ class PublishFixture(unittest.TestCase):
         for entry in plan["files"].values():
             entry["before_sha256"] = entry["sha256"]
         write_plan_file(self.plan_dir, plan)
+        self.refresh_plan_hash()
         return peeled
 
     def marker(self, peeled):
@@ -820,6 +850,7 @@ class TestPublish(PublishFixture):
             plan = read_plan(self.plan_dir)
             plan[flag] = True
             write_plan_file(self.plan_dir, plan)
+            self.refresh_plan_hash()
             with mock.patch.object(release, "run", side_effect=self.fake_run):
                 with self.assertRaises(release.ReleaseError):
                     self.publish()
@@ -827,6 +858,28 @@ class TestPublish(PublishFixture):
             self.assertEqual(mutating, [])
             plan[flag] = False
             write_plan_file(self.plan_dir, plan)
+            self.refresh_plan_hash()
+
+    def test_missing_trusted_hash_refused(self):
+        env = {k: v for k, v in self.env.items() if k != "CRYPTOKNIFE_PLAN_SHA256"}
+        with self.assertRaises(release.ReleaseError):
+            invoke("publish", "--repo", self.repo, "--plan-dir", self.plan_dir,
+                   "--assets-dir", self.assets_dir, env=env)
+        env = dict(self.env, CRYPTOKNIFE_PLAN_SHA256="xyz")
+        with self.assertRaises(release.ReleaseError):
+            invoke("publish", "--repo", self.repo, "--plan-dir", self.plan_dir,
+                   "--assets-dir", self.assets_dir, env=env)
+        self.assertEqual(self.gh.calls, [])
+        self.assertFalse(self.remote_has_tag())
+
+    def test_stale_plan_hash_rejected(self):
+        plan = read_plan(self.plan_dir)
+        plan["reason"] = "tampered"
+        write_plan_file(self.plan_dir, plan)
+        with self.assertRaises(release.ReleaseError):
+            self.publish()
+        self.assertEqual(self.gh.calls, [])
+        self.assertFalse(self.remote_has_tag())
 
     def test_wrong_env_rejected(self):
         for key, value in (
@@ -886,6 +939,7 @@ class TestPublish(PublishFixture):
         plan["action"] = "resume"
         plan["existing_tag_sha"] = peeled
         write_plan_file(self.plan_dir, plan)
+        self.refresh_plan_hash()
         self.gh.release = None
         invoke("apply", "--repo", self.repo, "--plan-dir", self.plan_dir)
         with mock.patch.object(release, "run", side_effect=self.fake_run):

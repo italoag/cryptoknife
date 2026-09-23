@@ -250,7 +250,11 @@ origem, mantendo retries determinísticos.
 O job `publish` é o único com `contents: write` e precisa de permissão de
 push normal em `main`; se as regras do repositório bloquearem o
 `GITHUB_TOKEN`, o job falha — proteção não é contornada nem alterada por
-estes arquivos. Todo o fluxo ocorre em um único workflow porque eventos
+estes arquivos. Nesse job privilegiado, o código de
+`scripts/release.py` é obtido do próprio commit do workflow
+(`github.sha`), nunca do artifact baixado, e o plano `_plan.json` é
+validado contra o SHA-256 emitido pelo job `plan` — metadados adulterados
+não chegam à publicação. Todo o fluxo ocorre em um único workflow porque eventos
 disparados por `GITHUB_TOKEN` não acionam outros workflows. O commit de
 release atualiza apenas `Cargo.toml`, `Cargo.lock` e `CHANGELOG.md`,
 sem alterar versões de dependências.

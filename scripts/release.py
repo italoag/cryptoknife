@@ -346,6 +346,12 @@ def load_plan(plan_dir: Path) -> dict:
     plan_path = plan_dir / PLAN_FILE
     if not plan_path.is_file() or plan_path.is_symlink():
         raise ReleaseError(f"Plano ausente: {plan_path}")
+    expected = os.environ.get("CRYPTOKNIFE_PLAN_SHA256")
+    if expected:
+        if not HEX64_RE.fullmatch(expected):
+            raise ReleaseError("CRYPTOKNIFE_PLAN_SHA256 não é sha256 hex de 64 dígitos")
+        if sha256_file(plan_path) != expected:
+            raise ReleaseError("_plan.json diverge do hash registrado pelo job plan")
     try:
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -466,6 +472,7 @@ def emit_outputs(plan: dict, plan_dir: Path):
         "version": plan.get("version") or "",
         "tag": plan.get("tag") or "",
         "dry_run": "true" if plan["dry_run"] else "false",
+        "plan_sha256": sha256_file(plan_dir / PLAN_FILE),
     }
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
@@ -990,6 +997,9 @@ def cmd_publish(args) -> int:
     repo = Path(args.repo).resolve()
     plan_dir = Path(args.plan_dir).resolve()
     assets_dir = Path(args.assets_dir).resolve()
+    expected_hash = os.environ.get("CRYPTOKNIFE_PLAN_SHA256")
+    if not expected_hash or not HEX64_RE.fullmatch(expected_hash):
+        raise ReleaseError("publish exige CRYPTOKNIFE_PLAN_SHA256 (sha256 de _plan.json)")
     plan = load_plan(plan_dir)
     if plan["action"] == "noop" or plan["dry_run"] or plan["offline"]:
         raise ReleaseError("Plano não publicável (noop, dry_run ou offline)")

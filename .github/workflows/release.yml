@@ -40,6 +40,7 @@ jobs:
       version: ${{ steps.prepare.outputs.version }}
       tag: ${{ steps.prepare.outputs.tag }}
       dry_run: ${{ steps.prepare.outputs.dry_run }}
+      plan_sha256: ${{ steps.prepare.outputs.plan_sha256 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -214,11 +215,20 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
+    env:
+      CRYPTOKNIFE_PLAN_SHA256: ${{ needs.plan.outputs.plan_sha256 }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.plan.outputs.source_sha }}
           fetch-depth: 0
+          persist-credentials: false
+      - name: Check out trusted release tooling
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: .release-work/trusted
+          fetch-depth: 1
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -239,10 +249,10 @@ jobs:
           name: release-source
           path: .release-work/downloads/release-source
       - name: Apply release metadata
-        run: python3 .release-metadata/tools/release.py apply --repo . --plan-dir .release-metadata
+        run: python3 .release-work/trusted/scripts/release.py apply --repo . --plan-dir .release-metadata
       - name: Collect release assets
-        run: python3 .release-metadata/tools/release.py collect --repo . --plan-dir .release-metadata --artifacts-dir .release-work/downloads --output-dir .release-work/assets
+        run: python3 .release-work/trusted/scripts/release.py collect --repo . --plan-dir .release-metadata --artifacts-dir .release-work/downloads --output-dir .release-work/assets
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .release-metadata/tools/release.py publish --repo . --plan-dir .release-metadata --assets-dir .release-work/assets
+        run: python3 .release-work/trusted/scripts/release.py publish --repo . --plan-dir .release-metadata --assets-dir .release-work/assets
