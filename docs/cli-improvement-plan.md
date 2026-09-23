@@ -346,3 +346,13 @@ Até esses gates, o estado é **implementação validada localmente**, não rele
 - `package_release.py` cria artefatos em modo exclusivo (`x`) e valida SHA256SUMS como arquivo regular sem links antes de empacotar, fechando a escrita através de symlinks pendentes.
 
 Testes novos cobrem os quatro pontos (suite local aprovada nesta sessão); gates remotos de CI e auditoria remota permanecem **pendentes** — não executados nesta sessão.
+
+### Remediação da auditoria RustSec
+
+Com `cargo-deny 0.18.6`, a auditoria remota passou a funcionar e reportou três avisos, corrigidos por atualização mínima de versão:
+
+- `RUSTSEC-2026-0190` — `anyhow` 1.0.95 → 1.0.103 (possível comportamento indefinido em `Error::downcast_mut`).
+- `RUSTSEC-2025-0023` — `tokio` 1.43.0 → 1.43.1 (ausência da exigência de `Sync` no canal broadcast).
+- `RUSTSEC-2025-0119` — `number_prefix` 0.4.0 (não mantido) removido via `indicatif` 0.17.11 → 0.18.3, que usa `unit-prefix` 0.5.x.
+
+A verificação local (testes, MSRV check, clippy, fmt) foi executada após a atualização e aprovada; a execução remota da auditoria após a correção permanece **pendente** de observação no CI.
