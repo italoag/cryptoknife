@@ -104,7 +104,10 @@ class PackagerTest(unittest.TestCase):
         else:
             with tarfile.open(archive) as bundle:
                 names = set(bundle.getnames())
-        for member in (exe, "README.md", "LICENSE"):
+        members = [exe, "README.md", "LICENSE"]
+        if (ROOT / "CHANGELOG.md").is_file():
+            members.append("CHANGELOG.md")
+        for member in members:
             self.assertIn(f"{base}/{member}", names)
 
     def test_success_tar_gz(self):

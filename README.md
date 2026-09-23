@@ -196,10 +196,64 @@ python3 scripts/package_release.py --binary target/release/cryptoknife \
   --target $(rustc -vV | awk '/host:/ {print $2}') --output-dir dist --smoke
 ```
 
-O workflow `release.yml` (`workflow_dispatch` apenas) exige a auditoria de
-dependências e os testes do alvo antes de empacotar os quatro alvos nativos.
-Os arquivos são disponibilizados como artifacts não assinados; não há
-publicação automática de release nem assinatura/proveniência nesta etapa.
+## Releases
+
+O workflow `release.yml` automatiza releases semânticas após `main` e por
+`workflow_dispatch`. O pipeline prepara metadados e notas, audita a árvore
+preparada, executa MSRV e os quatro builds/testes/empacotamentos nativos
+mais o crate fonte, e só então faz push atômico de `main` + tag, cria o
+rascunho da release, envia os sete assets (4 arquivos nativos, `.crate`,
+CHANGELOG.md e SHA256SUMS) e publica. Não há upload para crates.io nem
+assinatura de artifacts nesta etapa.
+
+Política de versão (SemVer, inclusive em 0.x):
+
+- `fix`, `perf`, `revert` → patch; `feat` → minor; `!` ou rodapé
+  `BREAKING CHANGE:`/`BREAKING-CHANGE:` → major.
+- `docs`, `chore`, `ci`, `refactor` e demais tipos não geram release,
+  salvo se marcados como breaking.
+- Os commits precisam seguir Conventional Commits — direto na branch ou
+  via título de squash; commits de merge são ignorados.
+- O bump manual (`patch`/`minor`/`major`) não pode reduzir o incremento
+  inferido pelos commits; `auto` é o padrão.
+- Apenas versões estáveis `MAJOR.MINOR.PATCH`, sem pre-release ou build
+  metadata.
+- Bootstrap: a primeira release usa a versão atual do `Cargo.toml`
+  (v0.2.0); não existem tags ou releases anteriores, portanto o primeiro
+  merge desta automação em `main` pode publicar v0.2.0 automaticamente.
+
+Push em `main` dispara release automático quando há commits elegíveis.
+Execução manual usa `dry_run=true` por padrão; `resume_tag` retoma a
+publicação de uma tag já criada por um workflow anterior:
+
+```sh
+gh workflow run release.yml --ref main -f dry_run=true -f bump=auto
+gh workflow run release.yml --ref main -f dry_run=false -f bump=auto
+gh workflow run release.yml --ref main -f dry_run=false -f bump=auto -f resume_tag=v0.2.0
+```
+
+Para pré-visualizar localmente o plano calculado, sem nenhuma chamada de
+rede (o plano resultante é marcado como `offline` e não pode ser
+publicado):
+
+```sh
+python3 scripts/release.py prepare --repository italoag/cryptoknife --offline --output-dir .release-work/preview
+```
+
+Reexecução de um publisher que falhou reutiliza os artifacts retidos da
+mesma run, garantindo os mesmos bytes testados. Uma nova run que gere
+assets byte-diferentes de um rascunho existente falha em vez de
+sobrescrever (`--clobber` nunca é usado); assets de releases publicadas
+nunca são alterados. A data das notas vem da data UTC do commit de
+origem, mantendo retries determinísticos.
+
+O job `publish` é o único com `contents: write` e precisa de permissão de
+push normal em `main`; se as regras do repositório bloquearem o
+`GITHUB_TOKEN`, o job falha — proteção não é contornada nem alterada por
+estes arquivos. Todo o fluxo ocorre em um único workflow porque eventos
+disparados por `GITHUB_TOKEN` não acionam outros workflows. O commit de
+release atualiza apenas `Cargo.toml`, `Cargo.lock` e `CHANGELOG.md`,
+sem alterar versões de dependências.
 
 ## Auditoria de dependências
 
