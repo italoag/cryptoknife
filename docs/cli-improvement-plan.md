@@ -290,7 +290,7 @@ Uma fase só pode ser marcada concluída após implementação, testes dos casos
 | MSRV | `cargo +1.85.0 check --locked --all-targets` aprovado; toolchain padrão não alterado |
 | Pacote fonte | `cargo package --locked --allow-dirty` aprovado, incluindo compilação de verificação |
 | Artefato nativo | tar.gz macOS ARM64 extraído e executado: versão exata, geração/verificação, alteração do conteúdo retorna 1 e SHA256SUMS conferido |
-| Licenças/fontes | cargo-deny 0.18.2: `licenses ok, sources ok`; avisos de licenças permitidas não utilizadas, sem falhas |
+| Licenças/fontes | Histórico: cargo-deny 0.18.2 local — `licenses ok, sources ok`; avisos de licenças permitidas não utilizadas, sem falhas |
 | Vulnerabilidades | **Pendente:** falha de rede ao buscar a base oficial RustSec; nenhuma exceção, supressão ou relaxamento de política aplicado |
 | Matriz remota | **Pendente:** workflows preparados para quatro alvos, ainda não executados nesta sessão |
 
@@ -332,8 +332,17 @@ Os dados desta medição são congelados. Atualizar a apresentação deve reutil
 
 ### Esteira de auditoria
 
-- O workflow reutilizável `audit.yml` (`cargo-deny 0.18.2`, base RustSec buscada a cada execução) é chamado pela CI em `rust.yml` e exigido por `release.yml`.
+- O workflow reutilizável `audit.yml` (`cargo-deny 0.18.6`, base RustSec buscada a cada execução) é chamado pela CI em `rust.yml` e exigido por `release.yml`.
 - Também roda semanalmente às segundas, 07:17 UTC, na branch padrão, e manualmente via `workflow_dispatch`.
 - O empacotamento de release depende da auditoria (`needs: audit`) e dos testes por alvo; falhas reprovam o job sem supressões.
 
 Até esses gates, o estado é **implementação validada localmente**, não release liberada.
+
+### Correções da revisão PR#3
+
+- Auditoria de dependências migrada de cargo-deny 0.18.2 para 0.18.6 (corrige a falha de CVSS 4 na base RustSec); apenas o pin e a chave de cache mudaram, sem relaxamento de política.
+- `verify --format` passou a ter precedência sobre a extensão do nome do arquivo: manifesto `.blake3` forçado com `--format manifest` é verificado pelos registros (algoritmo global não força entradas); SFV forçado usa CRC32; um `-a` explícito diferente de `crc32` é rejeitado. A validação de conflito entre algoritmo explícito e extensão de sidecar ocorre somente na detecção automática (`--format auto` ou opção ausente).
+- Componentes symlink intermediários em caminhos de entrada passaram a ser rejeitados na grafia original (sem resolver `..` antes), cobrindo descoberta, hashing, sidecars, documentos e raízes explícitas; exceção restrita no macOS para `/tmp`, `/var`, `/etc` que resolvem exatamente para `/private/*`.
+- `package_release.py` cria artefatos em modo exclusivo (`x`) e valida SHA256SUMS como arquivo regular sem links antes de empacotar, fechando a escrita através de symlinks pendentes.
+
+Testes novos cobrem os quatro pontos (suite local aprovada nesta sessão); gates remotos de CI e auditoria remota permanecem **pendentes** — não executados nesta sessão.

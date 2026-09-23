@@ -780,3 +780,217 @@ fn log_file_hardlink_alias_rejected() {
   );
   assert_ne!(code(&esc), Some(0));
 }
+
+#[test]
+fn forced_manifest_overrides_sidecar_extension() {
+  let dir = tempfile::tempdir().unwrap();
+  std::fs::write(dir.path().join("data.txt"), "hello world").unwrap();
+  let doc = concat!(
+    "{\"schema_version\":1,\"type\":\"manifest\",\"format\":\"cryptoknife\"}\n",
+    "{\"type\":\"checksum\",\"algorithm\":\"crc32\",\"path\":\"data.txt\",\"digest\":\"0d4a1185\"}\n",
+    "{\"type\":\"end\",\"entries\":1}\n"
+  );
+  std::fs::write(dir.path().join("checks.blake3"), doc).unwrap();
+  let out = run(
+    dir.path(),
+    &[
+      "-a",
+      "crc32",
+      "verify",
+      "checks.blake3",
+      "--format",
+      "manifest",
+    ],
+  );
+  assert_eq!(
+    code(&out),
+    Some(0),
+    "stderr: {}",
+    String::from_utf8_lossy(&out.stderr)
+  );
+}
+
+#[test]
+fn manifest_entries_use_record_algorithm_not_global() {
+  let dir = tempfile::tempdir().unwrap();
+  std::fs::write(dir.path().join("data.txt"), "hello world").unwrap();
+  std::fs::write(dir.path().join("second.txt"), "hello world").unwrap();
+  let doc = concat!(
+    "{\"schema_version\":1,\"type\":\"manifest\",\"format\":\"cryptoknife\"}\n",
+    "{\"type\":\"checksum\",\"algorithm\":\"crc32\",\"path\":\"data.txt\",\"digest\":\"0d4a1185\"}\n",
+    "{\"type\":\"checksum\",\"algorithm\":\"blake3\",\"path\":\"second.txt\",\"digest\":\"d74981efa70a0c880b8d8c1985d075dbcbf679b99a5f9914e5aaf96b831a9e24\"}\n",
+    "{\"type\":\"end\",\"entries\":2}\n"
+  );
+  std::fs::write(dir.path().join("doc.blake3"), doc).unwrap();
+  let out = run(
+    dir.path(),
+    &[
+      "-a",
+      "crc32",
+      "verify",
+      "doc.blake3",
+      "--format",
+      "manifest",
+      "--json",
+    ],
+  );
+  assert_eq!(
+    code(&out),
+    Some(0),
+    "stderr: {}",
+    String::from_utf8_lossy(&out.stderr)
+  );
+  let stdout = String::from_utf8_lossy(&out.stdout);
+  let events: Vec<serde_json::Value> = stdout
+    .lines()
+    .filter_map(|l| serde_json::from_str(l).ok())
+    .collect();
+  let algs: std::collections::HashSet<String> = events
+    .iter()
+    .filter(|v| v["type"] == "file")
+    .map(|v| v["algorithm"].as_str().unwrap_or("").to_string())
+    .collect();
+  assert_eq!(
+    algs,
+    ["crc32", "blake3"].into_iter().map(String::from).collect()
+  );
+  let summary = events
+    .iter()
+    .find(|v| v["type"] == "summary")
+    .expect("resumo ausente");
+  assert_eq!(summary["succeeded"], 2);
+}
+
+#[test]
+fn explicit_algorithm_still_conflicts_with_real_sidecar() {
+  let dir = tempfile::tempdir().unwrap();
+  std::fs::write(dir.path().join("d.txt"), "x").unwrap();
+  std::fs::write(dir.path().join("d.txt.blake3"), HELLO_BLAKE3).unwrap();
+  let out = run(dir.path(), &["-a", "crc32", "verify", "d.txt.blake3"]);
+  assert_eq!(code(&out), Some(2));
+}
+
+#[test]
+fn forced_sfv_overrides_extension_and_requires_crc32() {
+  let dir = tempfile::tempdir().unwrap();
+  std::fs::write(dir.path().join("data.txt"), "hello world").unwrap();
+  std::fs::write(dir.path().join("doc.blake3"), "data.txt 0D4A1185\n").unwrap();
+  let ok = run(
+    dir.path(),
+    &["-a", "crc32", "verify", "doc.blake3", "--format", "sfv"],
+  );
+  assert_eq!(
+    code(&ok),
+    Some(0),
+    "stderr: {}",
+    String::from_utf8_lossy(&ok.stderr)
+  );
+  let inferred = run(dir.path(), &["verify", "doc.blake3", "--format", "sfv"]);
+  assert_eq!(
+    code(&inferred),
+    Some(0),
+    "stderr: {}",
+    String::from_utf8_lossy(&inferred.stderr)
+  );
+  let bad = run(
+    dir.path(),
+    &["-a", "blake3", "verify", "doc.blake3", "--format", "sfv"],
+  );
+  assert_eq!(code(&bad), Some(2));
+}
+
+#[cfg(unix)]
+#[test]
+fn intermediate_symlink_inputs_rejected() {
+  use std::os::unix::fs::symlink;
+  let dir = tempfile::tempdir().unwrap();
+  let outside = tempfile::tempdir().unwrap();
+  std::fs::write(outside.path().join("data.txt"), "hello world").unwrap();
+  std::fs::create_dir(outside.path().join("subdir")).unwrap();
+  std::fs::write(outside.path().join("subdir/f.txt"), "x").unwrap();
+  symlink(outside.path(), dir.path().join("link")).unwrap();
+
+  let gen = run(dir.path(), &["generate", "link/data.txt"]);
+  assert_eq!(code(&gen), Some(3));
+  assert!(!outside.path().join("data.txt.blake3").exists());
+
+  let ver = run(dir.path(), &["verify", "link/data.txt"]);
+  assert_eq!(code(&ver), Some(3));
+
+  let raw = run(
+    dir.path(),
+    &["generate", "link/data.txt", "--format", "raw", "-o", "-"],
+  );
+  assert_eq!(code(&raw), Some(3));
+
+  let dir_root = run(dir.path(), &["generate", "link/subdir"]);
+  assert_eq!(code(&dir_root), Some(3));
+
+  let sneak = run(dir.path(), &["generate", "link/../f.txt"]);
+  assert_eq!(code(&sneak), Some(3));
+  let sneak2 = run(dir.path(), &["generate", "link/../data.txt"]);
+  assert_eq!(code(&sneak2), Some(3));
+}
+
+#[cfg(unix)]
+#[test]
+fn intermediate_symlink_before_parent_component_rejected() {
+  use std::os::unix::fs::symlink;
+  let base = tempfile::tempdir().unwrap();
+  let input = base.path().join("input");
+  let outside = base.path().join("outside");
+  std::fs::create_dir(&input).unwrap();
+  std::fs::create_dir(&outside).unwrap();
+  std::fs::write(base.path().join("data.txt"), "hello world").unwrap();
+  std::fs::write(outside.join("data.txt"), "hello world").unwrap();
+  symlink(&outside, input.join("link")).unwrap();
+
+  let out = run(&input, &["generate", "link/../data.txt"]);
+  assert_eq!(code(&out), Some(3));
+  assert!(
+    String::from_utf8_lossy(&out.stderr).contains("Symlink"),
+    "stderr: {}",
+    String::from_utf8_lossy(&out.stderr)
+  );
+  assert!(!base.path().join("data.txt.blake3").exists());
+  assert!(!outside.join("data.txt.blake3").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn relative_parent_to_regular_file_allowed() {
+  let dir = tempfile::tempdir().unwrap();
+  std::fs::write(dir.path().join("d.txt"), "hello world").unwrap();
+  std::fs::write(dir.path().join("d.txt.blake3"), HELLO_BLAKE3).unwrap();
+  let sub = dir.path().join("sub");
+  std::fs::create_dir(&sub).unwrap();
+  let out = run(&sub, &["verify", "../d.txt"]);
+  assert_eq!(
+    code(&out),
+    Some(0),
+    "stderr: {}",
+    String::from_utf8_lossy(&out.stderr)
+  );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_tmp_absolute_input_allowed() {
+  let f = tempfile::Builder::new()
+    .prefix("ck-input-")
+    .tempfile_in("/tmp")
+    .unwrap();
+  std::fs::write(f.path(), "x").unwrap();
+  let path = f.path().to_str().unwrap().to_string();
+  let dir = tempfile::tempdir().unwrap();
+  let out = run(
+    dir.path(),
+    &["generate", &path, "--format", "raw", "-o", "-"],
+  );
+  assert_eq!(
+    code(&out),
+    Some(0),
+    "stderr: {}",
+    String::from_utf8_lossy(&out.stderr)
+  );
+}

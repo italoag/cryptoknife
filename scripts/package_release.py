@@ -8,6 +8,7 @@ artefatos existentes."""
 
 import argparse
 import hashlib
+import os
 import re
 import shutil
 import stat
@@ -41,6 +42,30 @@ def sha256_of(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def open_checksum_catalog(path: Path):
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        before = None
+    if before is not None and (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1):
+        raise ValueError(f"SHA256SUMS deve ser arquivo regular sem links: {path}")
+    flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    if before is None:
+        flags |= os.O_CREAT | os.O_EXCL
+    fd = os.open(path, flags, 0o600)
+    try:
+        opened = os.fstat(fd)
+        after = path.lstat()
+        if (not stat.S_ISREG(opened.st_mode) or not stat.S_ISREG(after.st_mode)
+                or opened.st_nlink != 1 or not os.path.samestat(opened, after)
+                or (before is not None and not os.path.samestat(before, opened))):
+            raise ValueError(f"Identidade de SHA256SUMS alterada: {path}")
+        return os.fdopen(fd, "a", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def recorded_digest(sums_path: Path, archive_name: str) -> str:
@@ -130,27 +155,29 @@ def main() -> None:
 
     base = f"cryptoknife-{version}-{args.target}"
     archive = out_dir / (base + (".zip" if is_windows_target(args.target) else ".tar.gz"))
-    if archive.exists():
+    if archive.exists() or archive.is_symlink():
         sys.exit(f"artefato já existe: {archive}")
 
     exe_name = "cryptoknife.exe" if is_windows_target(args.target) else "cryptoknife"
-    with tempfile.TemporaryDirectory() as stage_dir:
-        stage = Path(stage_dir) / base
-        stage.mkdir()
-        shutil.copy2(binary, stage / exe_name)
-        shutil.copy2(ROOT / "README.md", stage / "README.md")
-        shutil.copy2(ROOT / "LICENSE", stage / "LICENSE")
-        if is_windows_target(args.target):
-            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
-                for entry in sorted(stage.iterdir()):
-                    bundle.write(entry, f"{base}/{entry.name}")
-        else:
-            with tarfile.open(archive, "w:gz") as bundle:
-                bundle.add(stage, arcname=base)
+    sums_path = out_dir / "SHA256SUMS"
+    with open_checksum_catalog(sums_path) as sums:
+        with tempfile.TemporaryDirectory() as stage_dir:
+            stage = Path(stage_dir) / base
+            stage.mkdir()
+            shutil.copy2(binary, stage / exe_name)
+            shutil.copy2(ROOT / "README.md", stage / "README.md")
+            shutil.copy2(ROOT / "LICENSE", stage / "LICENSE")
+            if is_windows_target(args.target):
+                with zipfile.ZipFile(archive, "x", zipfile.ZIP_DEFLATED) as bundle:
+                    for entry in sorted(stage.iterdir()):
+                        bundle.write(entry, f"{base}/{entry.name}")
+            else:
+                with tarfile.open(archive, "x:gz") as bundle:
+                    bundle.add(stage, arcname=base)
 
-    digest = sha256_of(archive)
-    with open(out_dir / "SHA256SUMS", "a", encoding="utf-8") as sums:
+        digest = sha256_of(archive)
         sums.write(f"{digest}  {archive.name}\n")
+        sums.flush()
     print(f"{archive}  sha256={digest}")
 
     if args.smoke:
@@ -158,4 +185,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (OSError, ValueError) as e:
+        sys.exit(f"Erro: {e}")

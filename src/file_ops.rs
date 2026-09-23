@@ -32,6 +32,48 @@ pub fn normalize_lexical(path: &Path) -> PathBuf {
   normalized
 }
 
+pub(crate) fn validate_input_path(path: &Path) -> Result<()> {
+  let absolute = if path.is_absolute() {
+    path.to_path_buf()
+  } else {
+    std::env::current_dir()?.join(path)
+  };
+  let ancestors: Vec<&Path> = absolute
+    .ancestors()
+    .filter(|part| !part.as_os_str().is_empty())
+    .collect();
+  for part in ancestors.into_iter().rev() {
+    let metadata = match std::fs::symlink_metadata(part) {
+      Ok(metadata) => metadata,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound && part == absolute => continue,
+      Err(error) => {
+        return Err(error).with_context(|| format!("Erro ao validar caminho {}", part.display()))
+      }
+    };
+    if metadata.file_type().is_symlink() {
+      #[cfg(target_os = "macos")]
+      {
+        let target = match part.to_str() {
+          Some("/tmp") => Some(Path::new("/private/tmp")),
+          Some("/var") => Some(Path::new("/private/var")),
+          Some("/etc") => Some(Path::new("/private/etc")),
+          _ => None,
+        };
+        if let Some(target) = target {
+          if part.canonicalize()? == target {
+            continue;
+          }
+        }
+      }
+      bail!(
+        "Symlink não permitido no caminho de entrada: {}",
+        part.display()
+      );
+    }
+  }
+  Ok(())
+}
+
 pub enum Discovery {
   File(PathBuf),
   Skipped(PathBuf),
@@ -189,6 +231,9 @@ impl Iterator for FileDiscovery {
         }
       }
       let root = self.roots.pop_front()?;
+      if let Err(e) = validate_input_path(&root) {
+        return Some(Discovery::Failed(root.clone(), e));
+      }
       let metadata = match std::fs::symlink_metadata(&root) {
         Ok(m) => m,
         Err(e) => {
@@ -425,6 +470,29 @@ mod tests {
     let cancelled = AtomicBool::new(false);
     atomic_write(&dest, b"new", true, &cancelled).unwrap();
     assert_eq!(std::fs::read_to_string(&dest).unwrap(), "new");
+  }
+
+  #[cfg(target_os = "macos")]
+  #[test]
+  fn test_validate_input_path_macos_aliases() {
+    assert!(validate_input_path(Path::new("/tmp")).is_ok());
+    assert!(validate_input_path(Path::new("/var")).is_ok());
+    assert!(validate_input_path(Path::new("/etc")).is_ok());
+    assert!(validate_input_path(Path::new("/tmp/nonexistent-leaf-ck")).is_ok());
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn test_validate_input_path_rejects_user_link() {
+    let dir = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    std::fs::write(outside.path().join("d.txt"), "x").unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+    assert!(validate_input_path(&link.join("d.txt")).is_err());
+    assert!(validate_input_path(&link.join("..").join("x")).is_err());
+    assert!(validate_input_path(&link).is_err());
+    assert!(validate_input_path(&dir.path().join("missing.txt")).is_ok());
   }
 
   #[cfg(unix)]

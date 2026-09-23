@@ -133,6 +133,15 @@ A ordem dos eventos segue a conclusão das tarefas e não é determinística.
   symlink são rejeitados, entradas não regulares falham antes da abertura.
 - Geração de documentos rejeita entradas cujo caminho canônico escapa da
   raiz ou contém componentes symlink.
+- Qualquer componente symlink no caminho de entrada informado (incluindo
+  intermediários, validados na grafia original sem resolver `..`) é
+  rejeitado. Exceção restrita no macOS: os aliases do sistema `/tmp`,
+  `/var` e `/etc` são aceitos somente quando resolvem exatamente para
+  `/private/tmp`, `/private/var` e `/private/etc`. Isto assume um diretório
+  pai confiável; não há imunidade a substituição concorrente de diretórios.
+- Em `verify`, `--format manifest|sfv` tem precedência sobre o nome do
+  arquivo: a extensão não é usada para inferir algoritmo e registros de
+  manifesto usam o algoritmo declarado em cada entrada. SFV exige CRC32.
 - Cancelamento: SIGINT interrompe descoberta e publicação (exit 130). A
   leitura de stdin bloqueada pelo SO pode não ser interrompida por uma
   biblioteca consumidora — a CLI resolve isso terminando o processo.
@@ -177,7 +186,10 @@ python3 scripts/benchmark.py --baseline /caminho/para/cryptoknife-baseline \
 
 `scripts/package_release.py` (Python >= 3.12, stdlib) gera tar.gz (Unix)
 ou zip (Windows) com o binário, README e LICENSE, registra o digest em
-SHA256SUMS e valida o artefato com `--smoke`:
+SHA256SUMS e valida o artefato com `--smoke`. O artefato é criado em modo
+exclusivo (destino existente ou symlink é recusado, nunca escrito através
+de link) e o catálogo SHA256SUMS é validado antes do empacotamento: deve
+ser arquivo regular sem hardlinks; symlinks são rejeitados.
 
 ```sh
 python3 scripts/package_release.py --binary target/release/cryptoknife \
@@ -191,7 +203,7 @@ publicação automática de release nem assinatura/proveniência nesta etapa.
 
 ## Auditoria de dependências
 
-O workflow reutilizável `audit.yml` executa `cargo-deny 0.18.2` contra a
+O workflow reutilizável `audit.yml` executa `cargo-deny 0.18.6` contra a
 base RustSec atual, licenças e fontes permitidas em `deny.toml`:
 
 - Chamado pela CI em pull requests para `main` e pushes em `main`.

@@ -546,22 +546,35 @@ async fn run_verify(cli: &Cli, args: &VerifyArgs, mut options: RunOptions) -> Ex
     _ => None,
   };
 
-  if let Some(explicit) = cli.algorithm {
-    for path in &args.paths {
-      if path_is_dash(path) {
-        continue;
+  if forced_format == Some(ChecksumFormat::Sfv) {
+    if let Some(explicit) = cli.algorithm {
+      if explicit != Algorithm::CRC32 {
+        return usage_error(&format!(
+          "Algoritmo explícito {} incompatível com formato SFV",
+          explicit.name()
+        ));
       }
-      if let Some(ext) = path.extension() {
-        if ext == "ckmanifest" {
+    }
+  }
+
+  if forced_format.is_none() {
+    if let Some(explicit) = cli.algorithm {
+      for path in &args.paths {
+        if path_is_dash(path) {
           continue;
         }
-        if let Some(inferred) = Algorithm::from_extension(ext) {
-          if inferred != explicit {
-            return usage_error(&format!(
-              "Algoritmo explícito {} conflita com a extensão de {}",
-              explicit.name(),
-              path.display()
-            ));
+        if let Some(ext) = path.extension() {
+          if ext == "ckmanifest" {
+            continue;
+          }
+          if let Some(inferred) = Algorithm::from_extension(ext) {
+            if inferred != explicit {
+              return usage_error(&format!(
+                "Algoritmo explícito {} conflita com a extensão de {}",
+                explicit.name(),
+                path.display()
+              ));
+            }
           }
         }
       }

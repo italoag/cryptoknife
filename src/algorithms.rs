@@ -266,6 +266,7 @@ fn hash_file(
   cancelled: &AtomicBool,
 ) -> Result<String> {
   validate_buffer_size(buffer_size)?;
+  crate::file_ops::validate_input_path(path)?;
   let context = path.display().to_string();
   let pre_metadata = std::fs::symlink_metadata(path)
     .with_context(|| format!("Não foi possível ler metadados de {}", context))?;

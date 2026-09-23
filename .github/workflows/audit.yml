@@ -22,10 +22,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/cryptoknife-audit-tools
-          key: ${{ runner.os }}-${{ runner.arch }}-cargo-deny-0.18.2
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-deny-0.18.6
       - name: Install cargo-deny
         if: steps.audit-tool.outputs.cache-hit != 'true'
-        run: cargo install cargo-deny@0.18.2 --locked --registry crates-io --root "${RUNNER_TEMP}/cryptoknife-audit-tools"
+        run: cargo install cargo-deny@0.18.6 --locked --registry crates-io --root "${RUNNER_TEMP}/cryptoknife-audit-tools"
       - name: Audit dependencies
         shell: bash
         run: |

@@ -144,6 +144,12 @@ impl VerifyJobs {
     algorithm: Algorithm,
     data: &Path,
   ) -> std::result::Result<Vec<u8>, (FileStatus, String)> {
+    crate::file_ops::validate_input_path(checksum).map_err(|e| {
+      (
+        FileStatus::ReadError,
+        format!("Erro ao validar {}: {:#}", checksum.display(), e),
+      )
+    })?;
     let metadata = std::fs::symlink_metadata(checksum).map_err(|e| {
       if e.kind() == std::io::ErrorKind::NotFound {
         (
@@ -312,6 +318,9 @@ impl VerifyJobs {
   }
 
   fn looks_like_bare_sidecar(path: &Path) -> bool {
+    if crate::file_ops::validate_input_path(path).is_err() {
+      return false;
+    }
     let file = match std::fs::File::open(path) {
       Ok(f) => f,
       Err(_) => return false,
@@ -335,6 +344,15 @@ impl VerifyJobs {
 
   fn open_doc(&mut self, origin: PathBuf, format: ChecksumFormat) {
     let algorithm = self.default_algorithm;
+    if let Err(e) = crate::file_ops::validate_input_path(&origin) {
+      self.deferred.push_back(immediate(
+        origin,
+        algorithm,
+        FileStatus::ReadError,
+        format!("Erro ao validar documento: {:#}", e),
+      ));
+      return;
+    }
     let file = match std::fs::File::open(&origin) {
       Ok(f) => f,
       Err(e) => {
@@ -615,6 +633,17 @@ impl Iterator for VerifyJobs {
         }
       }
       if let Some(path) = self.pending.pop_front() {
+        if let Err(e) = crate::file_ops::validate_input_path(&path) {
+          return Some((
+            path.clone(),
+            immediate(
+              path,
+              self.default_algorithm,
+              FileStatus::ReadError,
+              format!("{:#}", e),
+            ),
+          ));
+        }
         let metadata = match std::fs::symlink_metadata(&path) {
           Ok(m) => m,
           Err(e) => {

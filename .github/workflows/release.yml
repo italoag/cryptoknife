@@ -45,6 +45,8 @@ jobs:
     - uses: actions/setup-python@v5
       with:
         python-version: '3.12'
+    - name: Test release packager
+      run: python3 -m unittest discover -s tests -p 'test_package_release.py' -v
     - name: Package and smoke test
       shell: bash
       run: |
