@@ -32,7 +32,7 @@ env:
 jobs:
   plan:
     name: Prepare release metadata
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       release_required: ${{ steps.prepare.outputs.release_required }}
@@ -42,11 +42,11 @@ jobs:
       dry_run: ${{ steps.prepare.outputs.dry_run }}
       plan_sha256: ${{ steps.prepare.outputs.plan_sha256 }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5.1.0
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6.3.0
         with:
           python-version: '3.12'
       - name: Prepare release plan
@@ -64,7 +64,7 @@ jobs:
           [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
           [ -n "$RESUME_TAG" ] && args+=(--resume-tag "$RESUME_TAG")
           python3 scripts/release.py prepare "${args[@]}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6.0.0
         with:
           name: release-metadata
           path: |
@@ -94,18 +94,18 @@ jobs:
     name: MSRV check (${{ needs.plan.outputs.version }})
     needs: plan
     if: needs.plan.outputs.release_required == 'true' && needs.plan.outputs.dry_run != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5.1.0
         with:
           ref: ${{ needs.plan.outputs.source_sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6.3.0
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7.0.0
         with:
           name: release-metadata
           path: .release-metadata
@@ -123,7 +123,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -134,15 +134,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5.1.0
         with:
           ref: ${{ needs.plan.outputs.source_sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6.3.0
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7.0.0
         with:
           name: release-metadata
           path: .release-metadata
@@ -163,7 +163,7 @@ jobs:
           BIN=target/${{ matrix.target }}/release/cryptoknife
           [ -f "$BIN.exe" ] && BIN="$BIN.exe"
           python3 scripts/package_release.py --binary "$BIN" --target ${{ matrix.target }} --output-dir dist --smoke
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6.0.0
         with:
           name: release-binary-${{ matrix.target }}
           path: dist/
@@ -174,18 +174,18 @@ jobs:
     name: Source crate
     needs: [plan, audit]
     if: needs.plan.outputs.release_required == 'true' && needs.plan.outputs.dry_run != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5.1.0
         with:
           ref: ${{ needs.plan.outputs.source_sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6.3.0
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7.0.0
         with:
           name: release-metadata
           path: .release-metadata
@@ -194,7 +194,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Build source crate
         run: python3 .release-metadata/tools/release.py source --repo . --plan-dir .release-metadata --output-dir .release-work/source
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6.0.0
         with:
           name: release-source
           path: |
@@ -211,40 +211,40 @@ jobs:
       needs.plan.outputs.release_required == 'true' && needs.plan.outputs.dry_run != 'true'
       && needs.audit.result == 'success' && needs.msrv.result == 'success'
       && needs.package.result == 'success' && needs.source.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: write
     env:
       CRYPTOKNIFE_PLAN_SHA256: ${{ needs.plan.outputs.plan_sha256 }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5.1.0
         with:
           ref: ${{ needs.plan.outputs.source_sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Check out trusted release tooling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5.1.0
         with:
           ref: ${{ github.sha }}
           path: .release-work/trusted
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6.3.0
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7.0.0
         with:
           name: release-metadata
           path: .release-metadata
       - name: Download binary artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7.0.0
         with:
           pattern: release-binary-*
           path: .release-work/downloads
           merge-multiple: false
       - name: Download source artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7.0.0
         with:
           name: release-source
           path: .release-work/downloads/release-source

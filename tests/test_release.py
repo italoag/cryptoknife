@@ -492,11 +492,79 @@ class TestGhApiStatus(unittest.TestCase):
         )
 
     def test_404_absent_403_error(self):
-        with mock.patch.object(release, "run", return_value=self.make_result(404, rc=1)):
+        results = [self.make_result(404, rc=1), self.make_result(200, body="[]")]
+        with mock.patch.object(release, "run", side_effect=results):
             self.assertIsNone(release.gh_release_for_tag("o/r", "v1.0.0"))
         for status in (403, 500):
             with mock.patch.object(release, "run", return_value=self.make_result(status, rc=1)):
                 with self.assertRaises(release.ReleaseError):
+                    release.gh_release_for_tag("o/r", "v1.0.0")
+
+    def test_draft_found_via_list(self):
+        draft = {"draft": True, "tag_name": "v0.2.0",
+                 "assets": [{"name": "cryptoknife-0.2.0.crate"}]}
+        results = [self.make_result(404, rc=1),
+                   self.make_result(200, body=json.dumps([draft]))]
+        with mock.patch.object(release, "run", side_effect=results) as mocked:
+            rel = release.gh_release_for_tag("o/r", "v0.2.0")
+        self.assertEqual(rel, draft)
+        endpoints = [call.args[0][-1] for call in mocked.call_args_list]
+        self.assertEqual(endpoints, [
+            "repos/o/r/releases/tags/v0.2.0",
+            "repos/o/r/releases?per_page=100&page=1",
+        ])
+
+    def test_draft_found_on_second_page(self):
+        draft = {"draft": True, "tag_name": "v0.2.0", "assets": [{"name": "a"}]}
+        page1 = [{"draft": False, "tag_name": f"v9.{i}.0", "assets": []}
+                 for i in range(100)]
+        results = [
+            self.make_result(404, rc=1),
+            self.make_result(200, body=json.dumps(page1)),
+            self.make_result(200, body=json.dumps([draft])),
+        ]
+        with mock.patch.object(release, "run", side_effect=results) as mocked:
+            rel = release.gh_release_for_tag("o/r", "v0.2.0")
+        self.assertEqual(rel["assets"], [{"name": "a"}])
+        endpoints = [call.args[0][-1] for call in mocked.call_args_list]
+        self.assertTrue(endpoints[-1].endswith("page=2"))
+
+    def test_tag_200_skips_list(self):
+        published = {"draft": False, "tag_name": "v0.2.0", "assets": []}
+        with mock.patch.object(release, "run",
+                               return_value=self.make_result(200, body=json.dumps(published))) as mocked:
+            rel = release.gh_release_for_tag("o/r", "v0.2.0")
+        self.assertEqual(rel, published)
+        self.assertEqual(mocked.call_count, 1)
+
+    def test_list_http_errors_raise(self):
+        for status in (403, 500, 404):
+            results = [self.make_result(404, rc=1),
+                       self.make_result(status, body="[]", rc=1)]
+            with mock.patch.object(release, "run", side_effect=results):
+                with self.assertRaises(release.ReleaseError, msg=str(status)):
+                    release.gh_release_for_tag("o/r", "v1.0.0")
+
+    def test_malformed_list_rejected(self):
+        for body in ("{}", json.dumps(["x"]), "não é json"):
+            results = [self.make_result(404, rc=1), self.make_result(200, body=body)]
+            with mock.patch.object(release, "run", side_effect=results):
+                with self.assertRaises(release.ReleaseError, msg=body):
+                    release.gh_release_for_tag("o/r", "v1.0.0")
+
+    def test_malformed_draft_from_list_rejected(self):
+        drafts = [
+            {"tag_name": "v1.0.0", "assets": []},
+            {"draft": "yes", "tag_name": "v1.0.0", "assets": []},
+            {"draft": True, "tag_name": "v1.0.0"},
+            [{"draft": True, "tag_name": "v1.0.0", "assets": []},
+             {"draft": True, "tag_name": "v1.0.0", "assets": []}],
+        ]
+        for draft in drafts:
+            body = json.dumps(draft if isinstance(draft, list) else [draft])
+            results = [self.make_result(404, rc=1), self.make_result(200, body=body)]
+            with mock.patch.object(release, "run", side_effect=results):
+                with self.assertRaises(release.ReleaseError, msg=body):
                     release.gh_release_for_tag("o/r", "v1.0.0")
 
     def test_200_nonzero_cli_fails(self):
@@ -716,9 +784,11 @@ class FakeGh:
 
     def api(self, endpoint, method="GET"):
         if "/releases/tags/" in endpoint:
-            if self.release is None:
+            if self.release is None or self.release["draft"]:
                 return 404, "{}", 1
             return 200, json.dumps(self.release), 0
+        if "/releases?per_page=100&page=" in endpoint:
+            return 200, json.dumps([self.release] if self.release is not None else []), 0
         if endpoint.endswith("git/ref/heads/main"):
             return 200, json.dumps({"object": {"sha": "0" * 40}}), 0
         raise AssertionError(f"endpoint gh inesperado: {endpoint}")
@@ -990,6 +1060,8 @@ class TestPublish(PublishFixture):
         self.assertEqual(result, 0)
         uploads = [c for c in self.gh.calls if c[1:3] == ["release", "upload"]]
         self.assertEqual(uploads, [])
+        apis = [c[-1] for c in self.gh.calls if c[1] == "api"]
+        self.assertTrue(any("releases?per_page=100" in e for e in apis))
         self.assertFalse(self.gh.release["draft"])
 
     def test_conflicting_draft_asset_fails(self):
@@ -1033,6 +1105,52 @@ class TestPublish(PublishFixture):
             self.publish()
         edits = [c for c in self.gh.calls if c[1:3] == ["release", "edit"]]
         self.assertEqual(edits, [])
+
+    def test_missing_assets_after_upload_fails(self):
+        def noop_upload(argv, **kw):
+            if argv[1:3] == ["release", "upload"]:
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            return FakeGh.run(self.gh, argv, **kw)
+        self.gh.run = noop_upload
+        with self.assertRaises(release.ReleaseError):
+            self.publish()
+        edits = [c for c in self.gh.calls if c[1:3] == ["release", "edit"]]
+        self.assertEqual(edits, [])
+
+    def test_retry_after_failed_edit_no_duplicate_upload(self):
+        edits = {"count": 0}
+
+        def flaky(argv, **kw):
+            if argv[1:3] == ["release", "edit"]:
+                edits["count"] += 1
+                if edits["count"] == 1:
+                    return SimpleNamespace(returncode=1, stdout="", stderr="boom")
+            return FakeGh.run(self.gh, argv, **kw)
+
+        self.gh.run = flaky
+        with self.assertRaises(release.ReleaseError):
+            self.publish()
+        self.assertTrue(self.gh.release["draft"])
+        self.assertEqual(len(self.gh.release["assets"]), 7)
+
+        git(self.repo, "reset", "--hard", "HEAD~1")
+        git(self.repo, "checkout", "--detach", "HEAD")
+        plan = read_plan(self.plan_dir)
+        peeled = git(self.repo, "rev-parse", "v0.2.1^{commit}").stdout.strip()
+        plan["action"] = "resume"
+        plan["existing_tag_sha"] = peeled
+        write_plan_file(self.plan_dir, plan)
+        self.refresh_plan_hash()
+        invoke("apply", "--repo", self.repo, "--plan-dir", self.plan_dir)
+        self.gh.run = lambda argv, **kw: FakeGh.run(self.gh, argv, **kw)
+        result = self.publish()
+        self.assertEqual(result, 0)
+        uploads = [c for c in self.gh.calls if c[1:3] == ["release", "upload"]]
+        creates = [c for c in self.gh.calls if c[1:3] == ["release", "create"]]
+        self.assertEqual(len(uploads), 1)
+        self.assertEqual(len(creates), 1)
+        self.assertFalse(self.gh.release["draft"])
+        self.assertEqual(len(self.gh.release["assets"]), 7)
 
     def test_head_mismatch_rejected_before_refs(self):
         commit_file(self.repo, "c.txt", "x", "fix: outro commit")
@@ -1115,11 +1233,15 @@ class TestPublishLatestFlag(PublishFixture):
 
     def test_newer_draft_does_not_block_latest(self):
         peeled = self.setup_existing_tag()
+        draft_newer = {"draft": True, "tag_name": "v0.3.0", "assets": []}
         def api(endpoint, method="GET"):
             if "/releases/tags/v0.3.0" in endpoint:
-                return 200, json.dumps({
-                    "draft": True, "tag_name": "v0.3.0", "assets": [],
-                }), 0
+                return 404, "{}", 1
+            if "/releases?per_page=100&page=" in endpoint:
+                releases = [draft_newer]
+                if self.gh.release is not None:
+                    releases.append(self.gh.release)
+                return 200, json.dumps(releases), 0
             return FakeGh.api(self.gh, endpoint, method)
         self.gh.api = api
         git(self.repo, "tag", "v0.3.0")

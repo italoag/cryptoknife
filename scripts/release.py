@@ -218,10 +218,27 @@ def release_assets(version: str) -> list:
 
 def gh_release_for_tag(repository: str, tag: str):
     status, body = gh_api(f"repos/{repository}/releases/tags/{tag}")
-    if status == 404:
-        return None
     try:
-        release = json.loads(body)
+        if status == 404:
+            page = 1
+            while True:
+                status, body = gh_api(f"repos/{repository}/releases?per_page=100&page={page}")
+                if status != 200:
+                    raise ReleaseError(f"Falha ao consultar releases: HTTP {status}")
+                releases = json.loads(body)
+                if not isinstance(releases, list) or any(not isinstance(item, dict) for item in releases):
+                    raise ReleaseError("Resposta da lista de releases sem formato esperado")
+                matches = [item for item in releases if item.get("tag_name") == tag]
+                if len(matches) > 1:
+                    raise ReleaseError(f"Múltiplas releases para {tag}")
+                if matches:
+                    release = matches[0]
+                    break
+                if len(releases) < 100:
+                    return None
+                page += 1
+        else:
+            release = json.loads(body)
     except json.JSONDecodeError as error:
         raise ReleaseError(f"Resposta inválida da API de releases: {error}")
     if not isinstance(release, dict) or not isinstance(release.get("draft"), bool):
