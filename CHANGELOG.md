@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.1 - 2026-09-24
+
+### Correções
+
+- discover draft assets before publishing ([08ad51f](https://github.com/italoag/cryptoknife/commit/08ad51f07d209c669c6683857edfbe96484c43ce))
+
 ## v0.2.0 - 2026-09-24
 
 ### Mudanças incompatíveis
