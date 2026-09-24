@@ -19,22 +19,22 @@ permissions:
 jobs:
   audit:
     name: RustSec, licenses and sources
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5.1.0
         with:
           ref: ${{ inputs.checkout_ref || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Set up Python
         if: inputs.release_metadata_artifact != ''
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6.3.0
         with:
           python-version: '3.12'
       - name: Download release metadata
         if: inputs.release_metadata_artifact != ''
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7.0.0
         with:
           name: ${{ inputs.release_metadata_artifact }}
           path: .release-metadata
@@ -44,7 +44,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache audit tool
         id: audit-tool
-        uses: actions/cache@v4
+        uses: actions/cache@v5.1.0
         with:
           path: ${{ runner.temp }}/cryptoknife-audit-tools
           key: ${{ runner.os }}-${{ runner.arch }}-cargo-deny-0.18.6
@@ -60,7 +60,7 @@ jobs:
           "${RUNNER_TEMP}/cryptoknife-audit-tools/bin/cargo-deny" --locked check advisories licenses sources 2>&1 | tee audit-results/cargo-deny.log
       - name: Preserve audit report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6.0.0
         with:
           name: dependency-audit
           path: audit-results/cargo-deny.log

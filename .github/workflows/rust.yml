@@ -18,12 +18,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-14, macos-15-intel]
+        os: [ubuntu-24.04, windows-latest, macos-14, macos-15-intel]
 
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5.1.0
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt, clippy
@@ -32,12 +32,12 @@ jobs:
     - name: Run tests
       run: cargo test --locked --verbose
     - name: Format
-      if: matrix.os == 'ubuntu-latest'
+      if: matrix.os == 'ubuntu-24.04'
       run: cargo fmt --all -- --check
     - name: Clippy
-      if: matrix.os == 'ubuntu-latest'
+      if: matrix.os == 'ubuntu-24.04'
       run: cargo clippy --all-targets --all-features --locked -- -D warnings
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@v6.3.0
       with:
         python-version: '3.12'
     - name: Test release tooling
@@ -50,9 +50,9 @@ jobs:
         python3 scripts/package_release.py --binary "$BIN" --target "${{ runner.os }}-${{ runner.arch }}" --output-dir dist --smoke
 
   msrv:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5.1.0
     - uses: dtolnay/rust-toolchain@1.85.0
     - name: Check (MSRV)
       run: cargo check --locked --all-targets
