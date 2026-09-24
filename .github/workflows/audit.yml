@@ -2,6 +2,13 @@ name: Dependency Audit
 
 on:
   workflow_call:
+    inputs:
+      checkout_ref:
+        type: string
+        default: ''
+      release_metadata_artifact:
+        type: string
+        default: ''
   workflow_dispatch:
   schedule:
     - cron: '17 7 * * 1'
@@ -16,6 +23,24 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        if: inputs.release_metadata_artifact != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download release metadata
+        if: inputs.release_metadata_artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.release_metadata_artifact }}
+          path: .release-metadata
+      - name: Apply release metadata
+        if: inputs.release_metadata_artifact != ''
+        run: python3 .release-metadata/tools/release.py apply --repo . --plan-dir .release-metadata
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache audit tool
         id: audit-tool

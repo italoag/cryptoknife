@@ -167,6 +167,9 @@ def main() -> None:
             shutil.copy2(binary, stage / exe_name)
             shutil.copy2(ROOT / "README.md", stage / "README.md")
             shutil.copy2(ROOT / "LICENSE", stage / "LICENSE")
+            changelog = ROOT / "CHANGELOG.md"
+            if changelog.is_file():
+                shutil.copy2(changelog, stage / "CHANGELOG.md")
             if is_windows_target(args.target):
                 with zipfile.ZipFile(archive, "x", zipfile.ZIP_DEFLATED) as bundle:
                     for entry in sorted(stage.iterdir()):

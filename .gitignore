@@ -1,5 +1,7 @@
 /target
 /dist/
+/.release-work/
+/.release-metadata/
 .qodo/
 .idea/
 __pycache__/

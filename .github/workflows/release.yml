@@ -1,7 +1,27 @@
 name: Release
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      bump:
+        description: Incremento de versão
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+      dry_run:
+        description: Apenas validar, sem publicar
+        type: boolean
+        default: true
+      resume_tag:
+        description: Tag estável existente para retomar publicação
+        type: string
+        default: ''
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -10,14 +30,95 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  plan:
+    name: Prepare release metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_required: ${{ steps.prepare.outputs.release_required }}
+      source_sha: ${{ steps.prepare.outputs.source_sha }}
+      version: ${{ steps.prepare.outputs.version }}
+      tag: ${{ steps.prepare.outputs.tag }}
+      dry_run: ${{ steps.prepare.outputs.dry_run }}
+      plan_sha256: ${{ steps.prepare.outputs.plan_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare release plan
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUMP: ${{ inputs.bump || 'auto' }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          RESUME_TAG: ${{ inputs.resume_tag || '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--repository "$GH_REPO" --output-dir .release-work/plan --bump "$BUMP")
+          [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+          [ -n "$RESUME_TAG" ] && args+=(--resume-tag "$RESUME_TAG")
+          python3 scripts/release.py prepare "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-metadata
+          path: |
+            .release-work/plan/_plan.json
+            .release-work/plan/release-notes.md
+            .release-work/plan/Cargo.toml
+            .release-work/plan/Cargo.lock
+            .release-work/plan/CHANGELOG.md
+            .release-work/plan/tools/release.py
+            .release-work/plan/tools/release_version.py
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: error
+
   audit:
     name: Release dependency audit
+    needs: plan
+    if: needs.plan.outputs.release_required == 'true' && needs.plan.outputs.dry_run != 'true'
     uses: ./.github/workflows/audit.yml
+    with:
+      checkout_ref: ${{ needs.plan.outputs.source_sha }}
+      release_metadata_artifact: release-metadata
     permissions:
       contents: read
 
+  msrv:
+    name: MSRV check (${{ needs.plan.outputs.version }})
+    needs: plan
+    if: needs.plan.outputs.release_required == 'true' && needs.plan.outputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-metadata
+          path: .release-metadata
+      - name: Apply release metadata
+        run: python3 .release-metadata/tools/release.py apply --repo . --plan-dir .release-metadata
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Check MSRV
+        run: cargo check --locked --all-targets
+
   package:
-    needs: audit
+    name: Package ${{ matrix.target }}
+    needs: [plan, audit]
+    if: needs.plan.outputs.release_required == 'true' && needs.plan.outputs.dry_run != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -30,30 +131,128 @@ jobs:
             target: aarch64-apple-darwin
           - os: macos-15-intel
             target: x86_64-apple-darwin
-
     runs-on: ${{ matrix.os }}
-
+    timeout-minutes: 40
     steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: ${{ matrix.target }}
-    - name: Test release target
-      run: cargo test --locked --target ${{ matrix.target }}
-    - name: Build release
-      run: cargo build --locked --release --target ${{ matrix.target }}
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-    - name: Test release packager
-      run: python3 -m unittest discover -s tests -p 'test_package_release.py' -v
-    - name: Package and smoke test
-      shell: bash
-      run: |
-        BIN=target/${{ matrix.target }}/release/cryptoknife
-        [ -f "$BIN.exe" ] && BIN="$BIN.exe"
-        python3 scripts/package_release.py --binary "$BIN" --target ${{ matrix.target }} --output-dir dist --smoke
-    - uses: actions/upload-artifact@v4
-      with:
-        name: cryptoknife-${{ matrix.target }}
-        path: dist/
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-metadata
+          path: .release-metadata
+      - name: Apply release metadata
+        run: python3 .release-metadata/tools/release.py apply --repo . --plan-dir .release-metadata
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Test release tooling
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Test release target
+        run: cargo test --locked --target ${{ matrix.target }}
+      - name: Build release
+        run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Package and smoke test
+        shell: bash
+        run: |
+          BIN=target/${{ matrix.target }}/release/cryptoknife
+          [ -f "$BIN.exe" ] && BIN="$BIN.exe"
+          python3 scripts/package_release.py --binary "$BIN" --target ${{ matrix.target }} --output-dir dist --smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-binary-${{ matrix.target }}
+          path: dist/
+          retention-days: 14
+          if-no-files-found: error
+
+  source:
+    name: Source crate
+    needs: [plan, audit]
+    if: needs.plan.outputs.release_required == 'true' && needs.plan.outputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-metadata
+          path: .release-metadata
+      - name: Apply release metadata
+        run: python3 .release-metadata/tools/release.py apply --repo . --plan-dir .release-metadata
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build source crate
+        run: python3 .release-metadata/tools/release.py source --repo . --plan-dir .release-metadata --output-dir .release-work/source
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-source
+          path: |
+            .release-work/source/*.crate
+            .release-work/source/CHANGELOG.md
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [plan, audit, msrv, package, source]
+    if: >-
+      needs.plan.outputs.release_required == 'true' && needs.plan.outputs.dry_run != 'true'
+      && needs.audit.result == 'success' && needs.msrv.result == 'success'
+      && needs.package.result == 'success' && needs.source.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      CRYPTOKNIFE_PLAN_SHA256: ${{ needs.plan.outputs.plan_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out trusted release tooling
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: .release-work/trusted
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-metadata
+          path: .release-metadata
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-binary-*
+          path: .release-work/downloads
+          merge-multiple: false
+      - name: Download source artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-source
+          path: .release-work/downloads/release-source
+      - name: Apply release metadata
+        run: python3 .release-work/trusted/scripts/release.py apply --repo . --plan-dir .release-metadata
+      - name: Collect release assets
+        run: python3 .release-work/trusted/scripts/release.py collect --repo . --plan-dir .release-metadata --artifacts-dir .release-work/downloads --output-dir .release-work/assets
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .release-work/trusted/scripts/release.py publish --repo . --plan-dir .release-metadata --assets-dir .release-work/assets
