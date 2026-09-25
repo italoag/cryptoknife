@@ -24,6 +24,45 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 
 Versão mínima do Rust: 1.85 (`rust-version` no Cargo.toml).
 
+### Makefile
+
+Um `Makefile` na raiz centraliza os comandos comuns (requer GNU Make ≥ 3.81
+e shell POSIX — no Windows, use Git Bash; Python ≥ 3.12). `make help` lista
+todos os alvos e variáveis:
+
+```sh
+make setup
+make build
+make test
+make lint
+make verify
+make package
+make release-plan
+```
+
+`make setup` adiciona os componentes rustfmt/clippy e faz
+`cargo fetch --locked`; `build` compila em debug com `--locked` e
+`TARGET=host` por padrão; `test` executa as suites Rust e Python;
+`lint` combina fmt-check, clippy e actionlint; `verify` agrega check,
+lint, test, msrv e audit (inclui rede); `package` gera o build release
+nativo e o pacote com smoke test em `dist/`; `release-plan` cria o plano
+de release offline em `.release-work/preview`.
+
+`make setup-msrv` e `make setup-audit` provisionam explicitamente a
+toolchain 1.85.0 e o `cargo-deny` 0.18.6 da CI; `gh` e `actionlint` são
+instalados externamente. Despachos remotos (`release-preview`,
+`release-publish`, `release-resume`, `ci-run`, `audit-run`) e `clean`
+exigem `CONFIRM=yes`. `make release` é apenas build otimizado local — não
+publica nada. `package` exige o TARGET nativo (executa smoke test);
+`package-cross` aceita outro TARGET, sem smoke, desde que o linker do
+alvo esteja provisionado. `CARGO_TARGET_DIR` é exportado, tem precedência
+sobre a configuração do Cargo e determina o caminho do binário usado por
+`package` e `benchmark` (ex.: `make build CARGO_TARGET_DIR=out/target`).
+Pacotes e relatórios não sobrescrevem arquivos existentes e `PLAN_DIR`
+precisa estar vazio; `package-source` exige árvore git limpa; e
+`release-resume RESUME_TAG=vX.Y.Z` reconstrói os artefatos e recusa um
+draft existente com bytes diferentes.
+
 ## Uso
 
 ```
